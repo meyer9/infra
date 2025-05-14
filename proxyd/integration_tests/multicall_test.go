@@ -545,6 +545,74 @@ func TestMulticall(t *testing.T) {
 		require.Equal(t, 1, nodeBackendRequestCount(nodes, "node2"))
 		require.Equal(t, 1, nodeBackendRequestCount(nodes, "node3"))
 	})
+
+	t.Run("Batch transaction with mixed success and failure", func(t *testing.T) {
+		nodes, _, _, shutdown, svr, _ := setupMulticall(t, "multicall")
+		defer nodes["node1"].mockBackend.Close()
+		defer nodes["node2"].mockBackend.Close()
+		defer nodes["node3"].mockBackend.Close()
+		defer shutdown()
+
+		// Node 1 will succeed with a valid transaction
+		nodes["node1"].mockBackend.SetHandler(SingleResponseHandler(200, txAccepted))
+		// Node 2 will fail with a nonce error
+		nodes["node2"].mockBackend.SetHandler(SingleResponseHandler(200, nonceErrorResponse))
+		// Node 3 will timeout
+		nodes["node3"].mockBackend.SetHandler(SingleResponseHandlerWithSleep(200, txAccepted, 7*time.Second))
+
+		localSvr := setServerBackend(svr, nodes)
+
+		// Create a batch request with two transactions
+		batchReq := []map[string]interface{}{
+			{
+				"jsonrpc": "2.0",
+				"method":  "eth_sendRawTransaction",
+				"params":  []string{txHex1},
+				"id":      1,
+			},
+			{
+				"jsonrpc": "2.0",
+				"method":  "eth_sendRawTransaction",
+				"params":  []string{txHex1},
+				"id":      2,
+			},
+		}
+
+		batchBody, err := json.Marshal(batchReq)
+		require.NoError(t, err)
+
+		req, _ := http.NewRequest("POST", "https://1.1.1.1:8080", bytes.NewReader(batchBody))
+		req.Header.Set("X-Forwarded-For", "203.0.113.1")
+		rr := httptest.NewRecorder()
+
+		localSvr.HandleRPC(rr, req)
+
+		resp := rr.Result()
+		defer resp.Body.Close()
+
+		require.NotNil(t, resp.Body)
+		require.Equal(t, 200, resp.StatusCode)
+
+		// Parse the batch response
+		var batchResp []proxyd.RPCRes
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&batchResp))
+		require.Len(t, batchResp, 2)
+
+		// First response should be successful
+		require.False(t, batchResp[0].IsError())
+		require.Equal(t, "2.0", batchResp[0].JSONRPC)
+		require.Equal(t, float64(1), batchResp[0].ID)
+
+		// Second response should also be successful (from node1)
+		require.False(t, batchResp[1].IsError())
+		require.Equal(t, "2.0", batchResp[1].JSONRPC)
+		require.Equal(t, float64(2), batchResp[1].ID)
+
+		// Verify request counts
+		require.Equal(t, 2, nodeBackendRequestCount(nodes, "node1"))
+		require.Equal(t, 2, nodeBackendRequestCount(nodes, "node2"))
+		require.Equal(t, 2, nodeBackendRequestCount(nodes, "node3"))
+	})
 }
 
 // TriggerResponseHandler uses a channel to control when a backend returns
