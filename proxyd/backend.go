@@ -979,12 +979,13 @@ func (bg *BackendGroup) Forward(ctx context.Context, rpcReqs []*RPCReq, isBatch 
 }
 
 func isValidMulticallTx(rpcReqs []*RPCReq) bool {
-	if len(rpcReqs) == 1 {
-		if rpcReqs[0].Method == "eth_sendRawTransaction" {
-			return true
-		}
-	}
-	return false
+	return true
+	// if len(rpcReqs) == 1 {
+	// 	if rpcReqs[0].Method == "eth_sendRawTransaction" {
+	// 		return true
+	// 	}
+	// }
+	// return false
 }
 
 // Using special struct since servedBy may not be populated if error occurs
